@@ -1,5 +1,9 @@
 // Smoke test for dsh-skill-hub host side.
 //
+// Phase 0 (gateway parity): replays the Typert gateway's parameter parsing
+//   against SkillHubService method sources and checks every client
+//   remote(...) call site sends only declared fields — the regression guard
+//   for "args fields do not match the descriptor" errors.
 // Phase A (sandbox): a fake OS home mirrors a real multi-agent layout —
 //   ~/.agents/skills as the physical store that agent directories link into,
 //   a skills-src folder that must NOT count as installed, the same skill on
@@ -20,12 +24,61 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile, lstat, realpath, symlink
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
-import { SkillHubCore } from "../lib/index.js";
+import { SkillHubCore, SkillHubService } from "../lib/index.js";
 
 const skipReal = process.argv.includes("--skip-real");
 let passed = 0;
 const ok = (label) => { passed += 1; console.log(`  ✓ ${label}`); };
 const section = (label) => console.log(`\n== ${label} ==`);
+
+// ── Phase 0: typert gateway signature parity ────────────────────────────────
+section("Phase 0: typert gateway signature parity");
+
+const REMOTE_METHODS = ["getState", "importSkill", "importAll", "importUnloaded", "removeSkill", "readSkill", "saveSkill", "createSkill"];
+
+function gatewayParameterNames(method) {
+  const descriptor = Object.getOwnPropertyDescriptor(SkillHubService.prototype, method);
+  assert.ok(descriptor !== undefined && typeof descriptor.value === "function", `${method} must live on SkillHubService.prototype`);
+  const source = Function.prototype.toString.call(descriptor.value);
+  const open = source.indexOf("(");
+  const close = source.indexOf(")", open + 1);
+  assert.ok(open >= 0 && close >= 0, `${method} needs a parenthesized parameter list`);
+  const body = source.slice(open + 1, close).trim();
+  if (body.length === 0) return [];
+  const names = new Set();
+  for (const part of body.split(",").map((piece) => piece.trim())) {
+    assert.match(part, /^[$A-Z_a-z][$\w]*$/u, `${method}: parameter "${part}" must be a plain identifier (the gateway rejects destructuring, defaults, and rest)`);
+    assert.ok(!names.has(part), `${method}: duplicate parameter ${part}`);
+    names.add(part);
+  }
+  return [...names];
+}
+
+{
+  const signatures = new Map(REMOTE_METHODS.map((method) => [method, gatewayParameterNames(method)]));
+  assert.deepEqual(signatures.get("getState"), [], "getState takes no parameters");
+  assert.deepEqual(signatures.get("importSkill"), ["sourceId", "dirName", "mode"], "importSkill wire fields");
+  ok(`parsed ${REMOTE_METHODS.length} method signatures with plain identifier parameters`);
+
+  const clientSource = await readFile(new URL("../lib/client.js", import.meta.url), "utf8");
+  const callPattern = /\bremote\(\s*"([A-Za-z]+)"\s*,\s*\{([^}]*)\}/g;
+  let callSites = 0;
+  for (const match of clientSource.matchAll(callPattern)) {
+    const method = match[1];
+    const params = signatures.get(method);
+    assert.ok(params !== undefined, `client calls unknown Remote method "${method}"`);
+    const fields = match[2].split(",").map((piece) => piece.trim()).filter(Boolean).map((piece) => piece.split(":")[0].trim());
+    for (const field of fields) {
+      assert.ok(
+        params.includes(field),
+        `client sends "${field}" to ${method}(${params.join(", ") || "…"}) which does not declare it — the gateway would reject with arguments-invalid`,
+      );
+    }
+    callSites += 1;
+  }
+  assert.ok(callSites >= 6, `expected at least 6 client remote(...) call sites, found ${callSites}`);
+  ok(`all ${callSites} client remote(...) call sites send only declared fields`);
+}
 
 async function makeSkill(root, name, extra = "") {
   const dir = join(root, name);

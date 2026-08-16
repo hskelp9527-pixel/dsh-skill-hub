@@ -34,6 +34,7 @@ English | [简体中文](README.md)
 
 **Load reminders and one-click loading**
 
+- The Discover view renders **two categories** — "Not loaded (pending)" (first, with load buttons) and "Loaded (usable from the "/" menu)" — each with its own count, both following the agent filter and search.
 - Skills missing from the DSH library carry a "Not loaded" badge; "Load all unloaded (N)" batch-loads whatever the current filter shows.
 - Two load modes per skill:
   - **Load (link)** (recommended; junction on Windows): `~/.dsh/skills/<name>` points at the source — one copy on both sides, edits sync; deleting removes only the link.
@@ -91,7 +92,7 @@ Prerequisite: DSH initialized (`npm i -g @deepseek-ai/dsh`, then run `dsh web` o
 
 ## How it works
 
-- **Host side** (`lib/index.js`): a UI-free `SkillHubCore` (scan / merge / load, every root injectable for tests) wrapped in a thin `TypertRemoteService` exposed via `skillHub/*` Remote methods.
+- **Host side** (`lib/index.js`): a UI-free `SkillHubCore` (scan / merge / load, every root injectable for tests) wrapped in a thin `TypertRemoteService` exposed via `skillHub/*` Remote methods. Note: the Typert gateway treats the **plain identifier parameter names** in each method's source as the legal wire fields and invokes positionally — changing a Remote signature requires updating the client call fields in lockstep (smoke-test Phase 0 catches drift).
 - **Client side** (`lib/client.js`): registers the `settings.section` (id `skills`) settings page with zh/en dictionaries; theming uses DSW alias variables.
 - **State**: `~/.dsh/skills/.skill-manager.json` records `{mode, sourceId, sourcePath, addedAt}` per loaded skill (compatible with the old dsh-skill-manager records).
 - The plugin only scans, merges and loads — it **never copies or redistributes third-party skill content**; skills stay under their own repos and licenses.
@@ -103,6 +104,7 @@ git clone https://github.com/hskelp9527-pixel/dsh-skill-hub.git
 cd dsh-skill-hub
 
 # Host smoke test:
+#   Phase 0 gateway parity: Remote method signatures vs client call fields
 #   Phase A sandbox: fake multi-agent dirs → discovery / cross-agent merge / link & copy
 #                    load / batch load / duplicate rejection / removal semantics
 #   Phase B real machine: read-only scan, prints per-agent and merge stats

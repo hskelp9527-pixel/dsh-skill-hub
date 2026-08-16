@@ -3,6 +3,17 @@
 本项目的所有显著变更都记录在此文件中。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.1.0] - 2026-08-17
+
+### Fixed
+
+- **修复加载失败**（`typert gateway: skillHub/importSkill: args fields do not match the descriptor: unexpected "sourceId", "dirName", "mode"`）：Typert gateway 以方法源码中的**纯标识符参数名**作为合法 wire 字段并按位置传参；此前 Service 薄封装统一写成 `(args)`，客户端发来的字段全部被判为 unexpected。现在每个 Remote 方法签名与客户端字段一一对应（如 `importSkill(sourceId, dirName, mode)`）。
+
+### Added
+
+- **发现视图分两类展览**：「未加载（待入库）」与「已加载（可在 “/” 菜单使用）」两个分类各自带计数，均受 Agent 筛选与搜索影响；同前缀分组在两个分类内独立展开。
+- **gateway 签名对齐回归测试**（冒烟测试 Phase 0）：复刻 gateway 的参数解析规则校验全部方法签名，并扫描客户端每个 `remote(...)` 调用点，保证字段永不漂移。
+
 ## [1.0.1] - 2026-08-17
 
 ### Fixed

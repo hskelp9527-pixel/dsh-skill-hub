@@ -34,6 +34,7 @@
 
 **加载提醒与一键加载**
 
+- 发现视图分**两类展览**：「未加载（待入库）」（置顶、带加载按钮）与「已加载（可在 “/” 菜单使用）」，各带计数，均受 Agent 筛选与搜索影响。
 - 未加载到 DSH 的技能带「未加载」徽章；「加载全部未入库（N）」按当前筛选批量入库。
 - 每个技能两种加载方式：
   - **加载（链接）**（推荐，Windows 下用 junction）：`~/.dsh/skills/<name>` 指向源目录，两边同一份文件，编辑即改源；删除只移除链接。
@@ -91,7 +92,7 @@
 
 ## 工作原理
 
-- **宿主端**（`lib/index.js`）：无 UI 依赖的 `SkillHubCore`（扫描/合并/加载，全部方法可注入根目录，便于测试）+ `TypertRemoteService` 薄封装，通过 `skillHub/*` Remote 方法暴露给 Web。
+- **宿主端**（`lib/index.js`）：无 UI 依赖的 `SkillHubCore`（扫描/合并/加载，全部方法可注入根目录，便于测试）+ `TypertRemoteService` 薄封装，通过 `skillHub/*` Remote 方法暴露给 Web。注意：Typert gateway 以方法源码里的**纯标识符参数名**作为 wire 字段并按位置传参，修改 Remote 方法签名必须同步客户端调用字段（冒烟测试 Phase 0 会拦截漂移）。
 - **客户端**（`lib/client.js`）：注册 `settings.section`（id `skills`）设置页，中英双语词典，深色浅色主题变量取自 DSW alias。
 - **状态文件**：`~/.dsh/skills/.skill-manager.json` 记录每个已加载技能的 `{mode, sourceId, sourcePath, addedAt}`（兼容旧 dsh-skill-manager 的记录）。
 - 插件只做扫描、合并与加载，**不复制、不再分发任何第三方技能内容**；技能本体仍归属其各自仓库与协议。
@@ -103,6 +104,7 @@ git clone https://github.com/hskelp9527-pixel/dsh-skill-hub.git
 cd dsh-skill-hub
 
 # 宿主端冒烟测试：
+#   Phase 0 gateway 对齐：校验 Remote 方法签名与客户端调用字段一一对应
 #   Phase A 沙箱：伪造多 Agent 目录 → 发现/跨端合并/链接与复制加载/批量加载/重复拒绝/删除语义
 #   Phase B 真实本机：只读扫描，打印各 Agent 与合并统计
 #   Phase C 真实本机：加载一个真实技能为链接 → 校验 → 删除还原（不留痕迹）
