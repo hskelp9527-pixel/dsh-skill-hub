@@ -1,6 +1,6 @@
 {
   "name": "dsh-skill-hub",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Cross-agent skill hub for DeepSeek Harness (DSH) Web settings: scans every local coding agent's skill directory (Claude Code, Codex, OpenCode, Qwen, iFlow, Trae, ...), merges duplicates installed on multiple agents into one card, filters by agent, and loads skills into the global DSH library.",
   "type": "module",
   "main": "lib/index.js",

@@ -12,22 +12,24 @@
 
 - 自动发现本机所有装了技能的 Agent 目录，**扫到几个就有几个筛选分类**，没装的不会出现：
 
-  | Agent | 扫描目录 |
-  | --- | --- |
-  | Claude Code | `~/.claude/skills`、`~/.claude/skills-src` |
-  | Codex | `~/.codex/skills` |
-  | OpenCode | `~/.config/opencode/skill`、`~/.config/opencode/agent`、`~/.opencode/skill`、`~/.local/share/opencode/skill` |
-  | Qwen Code | `~/.qwen/skills` |
-  | iFlow CLI | `~/.iflow/skills` |
-  | Trae | `~/.trae/skills` |
-  | 通用 Agents | `~/.agents/skills` |
-  | Gemini CLI / Cursor / Windsurf / Goose | `~/.gemini/skills`、`~/.cursor/skills`、`~/.windsurf/skills`、`~/.goose/skills` |
+  | 来源 | 扫描目录 | 说明 |
+  | --- | --- | --- |
+  | Claude Code | `~/.claude/skills` | `~/.claude/skills-src` 只是符号链接的源存储，**不算已安装**，不参与扫描 |
+  | Codex | `~/.codex/skills` | |
+  | OpenCode | `~/.config/opencode/skill`、`~/.config/opencode/agent`、`~/.opencode/skill`、`~/.local/share/opencode/skill` | 多个历史位置归为同一 Agent |
+  | Qwen Code | `~/.qwen/skills` | |
+  | iFlow CLI | `~/.iflow/skills` | |
+  | Trae | `~/.trae/skills` | |
+  | Gemini CLI / Cursor / Windsurf / Goose | `~/.gemini/skills`、`~/.cursor/skills`、`~/.windsurf/skills`、`~/.goose/skills` | |
+  | 全局存储 | `~/.agents/skills` | `npx skills add -g` 的物理存储，**不是 Agent**：仅当技能未被任何真实 Agent 目录覆盖（按物理路径或技能名）时才显示，链接不被重复计数 |
 
 - 顶部汇总：发现几个 Agent、几个技能、多少个跨端重复安装已合并、几个尚未加载。
 
 **跨端合并去重**
 
 - 合并键 = SKILL.md frontmatter 的 `name`（缺失时用目录名）。同一个技能装在多个端 → **只显示一张卡片**，卡片上带每个端的徽章，展开可看各端安装路径并单独链接。
+- 同一 Agent 的多个目录（如 OpenCode 的历史位置）指向同一技能时只计一次；junction/symlink 会先解析到物理路径，链接到同一份内容的安装不会被算成两份。
+- 「源存储」类目录不参与计数：`~/.claude/skills-src` 直接不扫；`~/.agents/skills` 只兜底展示没有任何 Agent 覆盖的技能。
 - 按某个 Agent 筛选时显示该端的技能（合并后的数量，不是安装数）。
 
 **加载提醒与一键加载**
@@ -44,7 +46,7 @@
 - 编辑 SKILL.md（链接类技能保存时写回源目录）、两步确认删除、断链清理、内联新建技能。
 - 搜索命中分组自动展开、只显示匹配项。
 
-实测（本机）：6 个 Agent、277 个安装 → 合并为 124 张技能卡片，其中 `dbs` 系列五个端的重复全部合并。
+实测（本机）：5 个 Agent、242 个安装 → 合并为 123 张技能卡片，`dbs` 系列在 4 个端的重复全部合并；`~/.agents` 存储因全部被真实 Agent 覆盖而不再单独出现，`skills-src` 中未安装的技能不再上榜。
 
 ## 安装
 

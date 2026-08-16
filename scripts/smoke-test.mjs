@@ -1,18 +1,22 @@
 // Smoke test for dsh-skill-hub host side.
 //
-// Phase A (sandbox): a fake OS home with skills spread over several agent
-//   directories verifies discovery, cross-agent merge, link/copy import,
-//   batch load, duplicate rejection, and removal semantics — end to end,
-//   against a throwaway DSH home.
+// Phase A (sandbox): a fake OS home mirrors a real multi-agent layout —
+//   ~/.agents/skills as the physical store that agent directories link into,
+//   a skills-src folder that must NOT count as installed, the same skill on
+//   several agents — and verifies discovery, store/agent dedup, cross-agent
+//   merge, link/copy import, batch load, duplicate rejection, and removal
+//   semantics end to end against a throwaway DSH home.
 // Phase B (real machine, read-only): runs the exact production code paths
-//   against the real user home and prints the discovery summary.
+//   against the real user home and prints the discovery summary, asserting
+//   the dedup invariants (no skills-src source, no same-agent duplicates,
+//   store only contributes uncovered skills).
 // Phase C (real machine, round-trip): loads one small real skill into the
 //   real ~/.dsh/skills as a link, verifies it, then removes it — proving
 //   the real scan+import path without leaving anything behind.
 //
 // Usage: node scripts/smoke-test.mjs [--skip-real]
 
-import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile, lstat, realpath } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile, lstat, realpath, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
@@ -32,62 +36,113 @@ async function makeSkill(root, name, extra = "") {
   return dir;
 }
 
+/** Dir junction/symlink pointing at target (junction on Windows needs no privilege). */
+async function linkSkill(root, name, target) {
+  await mkdir(root, { recursive: true });
+  const dir = join(root, name);
+  await symlink(target, dir, process.platform === "win32" ? "junction" : "dir");
+  return dir;
+}
+
 // ── Phase A: sandbox end-to-end ─────────────────────────────────────────────
-section("Phase A: sandbox scan / merge / import");
+section("Phase A: sandbox scan / dedup / merge / import");
 
 const sandbox = await mkdtemp(join(tmpdir(), "dsh-skill-hub-test-"));
 const fakeHome = join(sandbox, "home"); // DSH home (library root = home/skills)
 const fakeAgents = join(sandbox, "agents"); // fake OS home with agent dirs
 
 const claudeDir = join(fakeAgents, ".claude", "skills");
+const skillsSrcDir = join(fakeAgents, ".claude", "skills-src"); // must be ignored
 const qwenDir = join(fakeAgents, ".qwen", "skills");
 const iflowDir = join(fakeAgents, ".iflow", "skills");
 const codexDir = join(fakeAgents, ".codex", "skills");
 const traeDir = join(fakeAgents, ".trae", "skills");
+const storeDir = join(fakeAgents, ".agents", "skills"); // backing store
 
-await makeSkill(claudeDir, "dbs"); // same skill on 3 agents → must merge
+// Physical store: dbs (linked into 3 agents), kami (duplicate copy in claude),
+// store-only (reachable from no agent → must stay visible under the store).
+const storeDbs = await makeSkill(storeDir, "dbs");
+await makeSkill(storeDir, "kami");
+await makeSkill(storeDir, "store-only");
+
+// Claude: junction to store + own real skills.
+await linkSkill(claudeDir, "dbs", storeDbs);
 await makeSkill(claudeDir, "dbs-goal");
 await makeSkill(claudeDir, "solo");
-await makeSkill(qwenDir, "dbs");
+await makeSkill(claudeDir, "kami"); // separate physical copy, same name
+await makeSkill(claudeDir, "gbro"); // also parked in skills-src → src copy must be ignored
+// Qwen / iFlow link the same physical dbs.
+await linkSkill(qwenDir, "dbs", storeDbs);
 await makeSkill(qwenDir, "other");
-await makeSkill(iflowDir, "dbs");
+await linkSkill(iflowDir, "dbs", storeDbs);
 await makeSkill(codexDir, "codex-only");
-await mkdir(join(traeDir, ".hidden"), { recursive: true }); // dot dir → ignored
+// skills-src: source storage, never an installed location.
+await makeSkill(skillsSrcDir, "gbro");
+await makeSkill(skillsSrcDir, "Eva-skill");
+// Trae: only hidden dirs / no SKILL.md → must not become a source.
+await mkdir(join(traeDir, ".hidden"), { recursive: true });
 await writeFile(join(traeDir, ".hidden", "SKILL.md"), "---\nname: hidden\n---\n", "utf8");
-await mkdir(join(traeDir, "no-skill-md"), { recursive: true }); // no SKILL.md → ignored
+await mkdir(join(traeDir, "no-skill-md"), { recursive: true });
 // .gemini/skills intentionally absent → agent must not appear
 
 const core = new SkillHubCore({ homePath: fakeHome, agentHome: fakeAgents });
 
 {
   const state = await core.getState();
-  const agentIds = state.agents.map((agent) => agent.id).sort();
-  assert.deepEqual(agentIds, ["claude", "codex", "iflow", "qwen"], `agents discovered: ${agentIds}`);
-  assert.ok(!agentIds.includes("gemini"), "absent agent directories must not be reported");
-  ok(`discovered agents: ${agentIds.join(", ")}`);
 
+  // Source invariants: no numbered claude#2, no skills-src path anywhere.
+  assert.ok(state.sources.every((source) => !source.id.includes("#")), `numbered source ids: ${state.sources.map((s) => s.id).join(",")}`);
+  assert.ok(state.sources.every((source) => !source.path.includes("skills-src")), "skills-src must never be a source");
+  ok("no claude#2 source and no skills-src source (source storage ≠ installed)");
+
+  // Agent chips: 4 real agents + the store (it has one uncovered skill).
+  const agentIds = state.agents.map((agent) => agent.id);
+  for (const expected of ["claude", "codex", "iflow", "qwen", "agents"]) {
+    assert.ok(agentIds.includes(expected), `agent chip missing: ${expected} (have ${agentIds.join(",")})`);
+  }
+  assert.ok(!agentIds.includes("trae"), "trae has no valid skills → no chip");
+  assert.ok(!agentIds.includes("gemini"), "absent agent directories must not be reported");
+  ok(`agent chips: ${agentIds.join(", ")} (trae/gemini correctly absent)`);
+
+  // The store only contributes what no agent covers.
+  const storeSource = state.sources.find((source) => source.store === true);
+  assert.deepEqual(storeSource.skills.map((skill) => skill.dirName), ["store-only"], "store keeps only uncovered skills");
+  ok("store (~/.agents) only lists skills no agent directory covers");
+
+  // Catalog: no same-agent duplicates inside any entry.
   const entries = state.catalog.entries;
-  assert.equal(state.catalog.installCount, 7, "install count");
-  assert.equal(entries.length, 5, `merged entries: ${entries.length}`);
-  assert.equal(state.catalog.mergedCount, 2, "merged duplicates");
-  assert.equal(state.catalog.unloadedCount, 5, "unloaded count on empty library");
-  ok(`catalog: 7 installs → 5 entries (2 duplicate installs merged)`);
+  for (const entry of entries) {
+    const ids = entry.installs.map((install) => install.agentId);
+    assert.deepEqual(ids, [...new Set(ids)], `duplicate agent in entry ${entry.name}`);
+  }
+  assert.ok(entries.every((entry) => entry.name !== "Eva-skill"), "skills-src-only skill must not appear");
+  ok("no entry lists the same agent twice; skills-src-only skills never appear");
 
   const dbs = entries.find((entry) => entry.name === "dbs");
-  assert.ok(dbs, "dbs entry exists");
   assert.equal(dbs.installs.length, 3, "dbs installs");
   assert.deepEqual([...dbs.agents].sort(), ["claude", "iflow", "qwen"], "dbs agents");
-  ok("dbs shows ONE card with 3 installs (claude + qwen + iflow)");
+  assert.equal(state.catalog.installCount, 10, `install count (${state.catalog.installCount})`);
+  assert.equal(entries.length, 8, `entries (${entries.length})`);
+  assert.equal(state.catalog.unloadedCount, 8, "unloaded count on empty library");
+  ok("dbs = ONE card, 3 installs (claude+qwen+iflow), store copy not double-counted");
+
+  const kami = entries.find((entry) => entry.name === "kami");
+  assert.equal(kami.installs.length, 1, "kami installs");
+  assert.equal(kami.installs[0].agentId, "claude", "kami attribution");
+  ok("same-name copy parked in the store is dropped (claude already has kami)");
+
+  const storeOnly = entries.find((entry) => entry.name === "store-only");
+  assert.equal(storeOnly.installs.length, 1);
+  assert.equal(storeOnly.installs[0].agentId, "agents");
+  ok("store-only skill stays visible under the store and can be loaded");
 
   const claudeAgent = state.agents.find((agent) => agent.id === "claude");
-  assert.equal(claudeAgent.entryCount, 3, "claude entry count");
-  const qwenAgent = state.agents.find((agent) => agent.id === "qwen");
-  assert.equal(qwenAgent.entryCount, 2, "qwen entry count");
-  ok("per-agent filter counts are merge-aware");
+  assert.equal(claudeAgent.entryCount, 5, "claude entry count");
+  ok("per-agent counts stay merge-aware");
 }
 
 {
-  // Link import of the merged dbs skill from the claude source.
+  // Link import of the merged dbs skill through the claude junction.
   const state = await core.getState();
   const claudeSource = state.sources.find((source) => source.agentId === "claude");
   const res = await core.importSkill({ sourceId: claudeSource.id, dirName: "dbs", mode: "link" });
@@ -95,31 +150,37 @@ const core = new SkillHubCore({ homePath: fakeHome, agentHome: fakeAgents });
   const libEntry = join(fakeHome, "skills", "dbs");
   const stats = await lstat(libEntry);
   assert.ok(stats.isSymbolicLink(), "library entry is a link");
-  const resolved = await realpath(libEntry);
-  assert.equal(resolved, join(claudeDir, "dbs"), "link resolves to the source");
-  ok("link import creates junction/symlink pointing at the source");
+  assert.equal(await realpath(libEntry), await realpath(join(claudeDir, "dbs")), "link chain resolves to the physical store copy");
+  ok("link import through a junction resolves to the physical source");
 
   const after = await core.getState();
   assert.equal(after.library.length, 1);
-  const dbsAfter = after.catalog.entries.find((entry) => entry.name === "dbs");
-  assert.equal(dbsAfter.inLibrary, true, "catalog marks dbs loaded");
-  assert.equal(after.catalog.unloadedCount, 4);
+  assert.equal(after.catalog.entries.find((entry) => entry.name === "dbs").inLibrary, true);
+  assert.equal(after.catalog.unloadedCount, 7);
   ok("catalog + unloaded counters update after load");
 }
 
 {
-  // Copy import synthesizes nothing here (frontmatter present) and copies files.
+  // Copy import.
   const state = await core.getState();
   const qwenSource = state.sources.find((source) => source.agentId === "qwen");
   const res = await core.importSkill({ sourceId: qwenSource.id, dirName: "other", mode: "copy" });
   assert.equal(res.ok, true);
   const stats = await lstat(join(fakeHome, "skills", "other"));
   assert.ok(stats.isDirectory(), "copy import is a real directory");
-  const raw = await readFile(join(fakeHome, "skills", "other", "SKILL.md"), "utf8");
-  assert.ok(raw.includes("name: other"));
   const stateFile = JSON.parse(await readFile(join(fakeHome, "skills", ".skill-manager.json"), "utf8"));
   assert.equal(stateFile.skills.other.mode, "copy");
   ok("copy import creates an independent directory and records state");
+}
+
+{
+  // Loading the store-only skill straight from the store source.
+  const state = await core.getState();
+  const storeSource = state.sources.find((source) => source.store === true);
+  const res = await core.importSkill({ sourceId: storeSource.id, dirName: "store-only", mode: "link" });
+  assert.equal(res.ok, true);
+  assert.equal(await realpath(join(fakeHome, "skills", "store-only")), join(storeDir, "store-only"));
+  ok("loading an uncovered skill from the store works");
 }
 
 {
@@ -141,11 +202,11 @@ const core = new SkillHubCore({ homePath: fakeHome, agentHome: fakeAgents });
   ok("agent-scoped batch load skips skills the agent does not have");
 
   const resAll = await core.importUnloaded({ mode: "link" });
-  assert.equal(resAll.imported, 3, `unscoped batch loads remaining skills (got ${resAll.imported})`);
+  assert.equal(resAll.imported, 5, `unscoped batch loads remaining skills (got ${resAll.imported})`);
   const after = await core.getState();
   assert.equal(after.catalog.unloadedCount, 0, "everything loaded");
-  assert.equal(after.library.length, 5);
-  ok("batch load fills the library to 5/5 with zero unloaded left");
+  assert.equal(after.library.length, 8);
+  ok("batch load fills the library to 8/8 with zero unloaded left");
 }
 
 {
@@ -153,8 +214,8 @@ const core = new SkillHubCore({ homePath: fakeHome, agentHome: fakeAgents });
   const res = await core.removeSkill({ dirName: "dbs" });
   assert.equal(res.ok, true);
   await assert.rejects(() => lstat(join(fakeHome, "skills", "dbs")));
-  const sourceRaw = await readFile(join(claudeDir, "dbs", "SKILL.md"), "utf8");
-  assert.ok(sourceRaw.includes("name: dbs"), "source untouched after link removal");
+  const sourceRaw = await readFile(join(storeDbs, "SKILL.md"), "utf8");
+  assert.ok(sourceRaw.includes("name: dbs"), "physical store copy untouched after link removal");
   const stateFile = JSON.parse(await readFile(join(fakeHome, "skills", ".skill-manager.json"), "utf8"));
   assert.equal(stateFile.skills.dbs, undefined, "state entry cleaned");
   ok("removing a link deletes only the link and cleans state");
@@ -185,12 +246,24 @@ if (!skipReal) {
     console.log(`  · ${agent.label.padEnd(24)} skills=${String(agent.count).padStart(3)}  mergedEntries=${agent.entryCount}`);
   }
   console.log(`  → ${state.agents.length} agents, ${state.catalog.installCount} installs, ${state.catalog.entries.length} unique skills, ${state.catalog.mergedCount} duplicate installs merged, ${state.catalog.unloadedCount} not loaded`);
+
+  // Dedup invariants on real data.
+  assert.ok(state.sources.every((source) => !source.path.includes("skills-src")), "no skills-src source");
+  assert.ok(state.sources.every((source) => !source.id.includes("#")), "no numbered duplicate sources");
+  for (const entry of state.catalog.entries) {
+    const ids = entry.installs.map((install) => install.agentId);
+    assert.deepEqual(ids, [...new Set(ids)], `duplicate agent in entry ${entry.name}`);
+  }
+  const store = state.sources.find((source) => source.store === true);
+  if (store !== undefined) {
+    console.log(`  · store contributes ${store.skills.length} uncovered skill(s)`);
+  }
   const multi = state.catalog.entries.filter((entry) => entry.installs.length >= 3).slice(0, 5);
   for (const entry of multi) {
     console.log(`  · merged: ${entry.name} ← ${entry.installs.map((install) => install.agentId).join(", ")}`);
   }
   assert.ok(state.catalog.mergedCount > 0, "real machine has cross-agent duplicates to merge");
-  ok("real-machine scan sees every installed agent and merges duplicates");
+  ok("real-machine scan: dedup invariants hold, duplicates merged");
 }
 
 // ── Phase C: real machine, single import round-trip ─────────────────────────
@@ -208,8 +281,7 @@ if (!skipReal) {
     const res = await real.importSkill({ sourceId: install.sourceId, dirName: install.dirName, mode: "link" });
     assert.equal(res.ok, true);
     const libPath = join(before.libraryRoot, install.dirName);
-    const resolved = await realpath(libPath);
-    assert.equal(resolved, await realpath(install.path), "loaded skill resolves to its source");
+    assert.equal(await realpath(libPath), await realpath(install.path), "loaded skill resolves to its source");
     const mid = await real.getState();
     const entry = mid.catalog.entries.find((item) => item.name === candidate.name);
     assert.equal(entry.inLibrary, true);

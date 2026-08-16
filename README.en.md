@@ -12,22 +12,24 @@ English | [简体中文](README.md)
 
 - Detects every local agent directory that actually holds skills — **as many filter chips as agents found**; absent agents never appear:
 
-  | Agent | Scanned directories |
-  | --- | --- |
-  | Claude Code | `~/.claude/skills`, `~/.claude/skills-src` |
-  | Codex | `~/.codex/skills` |
-  | OpenCode | `~/.config/opencode/skill`, `~/.config/opencode/agent`, `~/.opencode/skill`, `~/.local/share/opencode/skill` |
-  | Qwen Code | `~/.qwen/skills` |
-  | iFlow CLI | `~/.iflow/skills` |
-  | Trae | `~/.trae/skills` |
-  | Universal Agents | `~/.agents/skills` |
-  | Gemini CLI / Cursor / Windsurf / Goose | `~/.gemini/skills`, `~/.cursor/skills`, `~/.windsurf/skills`, `~/.goose/skills` |
+  | Source | Scanned directories | Notes |
+  | --- | --- | --- |
+  | Claude Code | `~/.claude/skills` | `~/.claude/skills-src` is symlink source storage, **not an install** — never scanned |
+  | Codex | `~/.codex/skills` | |
+  | OpenCode | `~/.config/opencode/skill`, `~/.config/opencode/agent`, `~/.opencode/skill`, `~/.local/share/opencode/skill` | historical locations collapse into one agent |
+  | Qwen Code | `~/.qwen/skills` | |
+  | iFlow CLI | `~/.iflow/skills` | |
+  | Trae | `~/.trae/skills` | |
+  | Gemini CLI / Cursor / Windsurf / Goose | `~/.gemini/skills`, `~/.cursor/skills`, `~/.windsurf/skills`, `~/.goose/skills` | |
+  | Global store | `~/.agents/skills` | physical store of `npx skills add -g`, **not an agent**: shown only for skills no real agent directory covers (by physical path or name), so links are never double-counted |
 
 - Header summary: how many agents and skills were found, how many cross-agent installs were merged, how many are not loaded yet.
 
 **Cross-agent merge (no duplicates)**
 
 - Merge key = the SKILL.md frontmatter `name` (falls back to the directory name). A skill installed on several agents renders **one card** with a badge per agent; expand it to see each install path and link it individually.
+- Several directories of the same agent (OpenCode's historical locations, say) count a skill once; junctions/symlinks are resolved to physical paths first, so installs linking the same content never double-count.
+- Source-storage directories never inflate the list: `~/.claude/skills-src` is not scanned at all, and `~/.agents/skills` only back-fills skills no agent covers.
 - Filtering by an agent shows that agent's skills counted post-merge, not per-install.
 
 **Load reminders and one-click loading**
@@ -44,7 +46,7 @@ English | [简体中文](README.md)
 - Edit SKILL.md (linked skills save straight to the source), two-step delete, broken-link cleanup, inline creation.
 - Searching auto-expands matching groups and hides non-matching members.
 
-Verified on the author's machine: 6 agents, 277 installs → 124 merged cards, with the whole `dbs` family deduplicated across five agents.
+Verified on the author's machine: 5 agents, 242 installs → 123 merged cards, with the whole `dbs` family deduplicated across 4 agents; the `~/.agents` store disappears when fully covered by real agents, and uninstalled skills parked in `skills-src` never show up.
 
 ## Install
 
